@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#161b22" />
+
+    <!-- Apple PWA meta tags -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="RemoteDesk" />
+
+    <!-- Open Graph / Social -->
+    <meta name="description" content="Stream your Windows PC to iPad via WebRTC" />
+
+    <!-- PWA manifest -->
+    <link rel="manifest" href="/manifest.json" />
+
+    <!-- Apple touch icon (fallback if no icons/ folder yet) -->
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+
+    <title>Remote Desktop</title>
+
+    <style>
+      /* Prevent bounce scroll and ensure true full-screen on iOS */
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #0d1117;
+        -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
+      }
+      #app {
+        width: 100%;
+        height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+
+    <!-- Service Worker registration -->
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', function () {
+          navigator.serviceWorker
+            .register('/sw.js', { scope: '/' })
+            .then(function (registration) {
+              console.log('[SW] Registered, scope:', registration.scope);
+
+              // Notify any waiting SW to activate immediately
+              if (registration.waiting) {
+                registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+              }
+
+              registration.addEventListener('updatefound', function () {
+                var newWorker = registration.installing;
+                if (!newWorker) return;
+                newWorker.addEventListener('statechange', function () {
+                  if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                    console.log('[SW] New version available — reloading');
+                    newWorker.postMessage({ type: 'SKIP_WAITING' });
+                    window.location.reload();
+                  }
+                });
+              });
+            })
+            .catch(function (err) {
+              console.warn('[SW] Registration failed:', err);
+            });
+        });
+      }
+    </script>
+
+    <!-- App entry point -->
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

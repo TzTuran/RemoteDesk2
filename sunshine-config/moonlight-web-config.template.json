@@ -1,0 +1,64 @@
+{
+  "_comment": "Moonlight-Web frontend configuration template. Variables (${...}) are substituted by install scripts (configure-moonlight.ps1). This file is served at /config.json by web-server.exe.",
+  "version": "1.0.0",
+
+  "host": "${TAILSCALE_HOSTNAME}",
+
+  "sunshinePort": 47989,
+  "webPort": 8080,
+
+  "iceServers": [
+    {
+      "_comment": "Google public STUN — used for NAT traversal candidate gathering",
+      "urls": ["stun:stun.l.google.com:19302"]
+    },
+    {
+      "urls": ["stun:stun1.l.google.com:19302"]
+    },
+    {
+      "_comment": "Self-hosted coturn TURN server on Tailscale IP — relay fallback when direct paths fail",
+      "urls": ["turn:${TAILSCALE_IP}:3478"],
+      "username": "${TURN_USER}",
+      "credential": "${TURN_PASS}"
+    },
+    {
+      "_comment": "TURN over TLS (port 5349) — required when client network blocks UDP",
+      "urls": ["turns:${TAILSCALE_IP}:5349"],
+      "username": "${TURN_USER}",
+      "credential": "${TURN_PASS}"
+    }
+  ],
+
+  "codec": "auto",
+
+  "targetResolution": "1920x1080",
+  "targetFps": 60,
+
+  "enableHDR": false,
+
+  "enableAudio": true,
+  "audioCodec": "opus",
+  "audioBitrate": 160,
+
+  "inputMode": "relative",
+  "enableGamepad": true,
+
+  "pwaEnabled": true,
+
+  "ui": {
+    "theme": "dark",
+    "showFpsCounter": false,
+    "showBitrateCounter": false,
+    "showLatencyStats": false,
+    "language": "en"
+  },
+
+  "advanced": {
+    "streamTimeout": 30,
+    "reconnectOnFailure": true,
+    "maxReconnectAttempts": 3,
+    "reconnectDelayMs": 2000,
+    "iceTransportPolicy": "all",
+    "sdpSemantics": "unified-plan"
+  }
+}

@@ -1,0 +1,9 @@
+# Downloaded at build time by build.ps1 — not committed to git
+# Files expected here:
+#   sunshine-installer.exe  (fetched from LizardByte/Sunshine releases)
+#   tailscale.msi           (fetched from pkgs.tailscale.com)
+#   web-server.exe          (built by moonlight-web/server cargo build)
+#   static/                 (built by moonlight-web/web vite build)
+#   config/                 (copied from sunshine-config/ + tailscale/ templates)
+#   vc_redist.x64.exe       (optional, fetched from Microsoft)
+#   MicrosoftEdgeWebView2RuntimeInstallerX64.exe  (optional)

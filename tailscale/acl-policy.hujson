@@ -1,0 +1,114 @@
+// Tailscale ACL Policy — Remote Desktop Solution
+//
+// Format: HuJSON (JSON with C-style comments and trailing commas).
+// Apply this policy at: https://login.tailscale.com/admin/acls
+//
+// Topology:
+//   - Devices tagged "tag:remote-desktop" run the Sunshine + Moonlight-Web server.
+//   - All tailnet members (autogroup:members) may stream from those servers.
+//   - Administrators (autogroup:admin) have emergency Tailscale SSH access.
+//   - Tailscale Funnel (public HTTPS on port 443) is permitted for the tag.
+//
+// Ports used by the remote desktop stack:
+//   443   — Tailscale Funnel → Moonlight-Web (HTTPS)
+//   8080  — Moonlight-Web local HTTP (not Funneled directly)
+//   47984 — Sunshine RTSP   (LAN / Tailscale only)
+//   47985 — Sunshine video  (LAN / Tailscale only)
+//   47986 — Sunshine control
+//   47987 — Sunshine audio
+//   47988 — Sunshine mic input
+//   47989 — Sunshine HTTPS management UI
+//   3478  — coturn TURN (UDP/TCP)
+//   5349  — coturn TURN over TLS
+//   40000-40010 — coturn relay port range (UDP)
+
+{
+  // =========================================================================
+  // Access Control Lists
+  // =========================================================================
+  "acls": [
+    {
+      // All tailnet members (and tagged nodes) may reach the remote desktop
+      // server on any port.  Tighten this to specific ports if desired —
+      // e.g. "dst": ["tag:remote-desktop:47989"] for management-UI only.
+      "action": "accept",
+      "src":    ["autogroup:members"],
+      "dst":    ["tag:remote-desktop:*"],
+    },
+
+    {
+      // Admins have unrestricted access to remote-desktop nodes (includes
+      // Tailscale SSH, management UI, and streaming ports).
+      "action": "accept",
+      "src":    ["autogroup:admin"],
+      "dst":    ["tag:remote-desktop:*"],
+    },
+
+    {
+      // Allow remote-desktop nodes to reach coturn TURN server if it runs
+      // on a separate node.  If coturn is co-hosted, this rule is not needed.
+      "action": "accept",
+      "src":    ["tag:remote-desktop"],
+      "dst":    ["tag:turn-server:3478", "tag:turn-server:5349"],
+    },
+  ],
+
+  // =========================================================================
+  // Tag Ownership
+  // =========================================================================
+  // Only admins may assign these tags to prevent privilege escalation.
+  "tagOwners": {
+    // Nodes running Sunshine + Moonlight-Web stack.
+    "tag:remote-desktop": ["autogroup:admin"],
+
+    // Optional: separate node for the coturn TURN server.
+    "tag:turn-server": ["autogroup:admin"],
+  },
+
+  // =========================================================================
+  // Tailscale SSH
+  // =========================================================================
+  // Provides emergency shell access to remote-desktop nodes without
+  // requiring a separate SSH daemon or open firewall port.
+  "ssh": [
+    {
+      // Admins may SSH into remote-desktop nodes as any non-root user.
+      "action": "accept",
+      "src":    ["autogroup:admin"],
+      "dst":    ["tag:remote-desktop"],
+      "users":  ["autogroup:nonroot"],
+    },
+    {
+      // Remote-desktop nodes may SSH to each other (e.g. for cluster ops).
+      "action": "accept",
+      "src":    ["tag:remote-desktop"],
+      "dst":    ["tag:remote-desktop"],
+      "users":  ["autogroup:nonroot"],
+    },
+  ],
+
+  // =========================================================================
+  // Node Attributes
+  // =========================================================================
+  "nodeAttrs": [
+    {
+      // Grant Funnel capability to remote-desktop nodes.
+      // Funnel allows public HTTPS traffic (port 443) to reach these nodes
+      // via Tailscale's global reverse proxy — no open firewall port needed.
+      "target": ["tag:remote-desktop"],
+      "attr":   ["funnel"],
+    },
+    {
+      // Enable Tailscale SSH UI (shows SSH sessions in admin console).
+      "target": ["tag:remote-desktop"],
+      "attr":   ["sshRecorderEnabled"],
+    },
+  ],
+
+  // =========================================================================
+  // Host info / alias groups (optional, for readability)
+  // =========================================================================
+  // "hosts": {
+  //   "turn-server": "100.x.y.z",
+  // },
+}

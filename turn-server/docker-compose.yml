@@ -1,0 +1,97 @@
+version: "3.8"
+
+# =============================================================================
+# coturn TURN Server — Docker Compose
+#
+# Provides STUN/TURN relay for WebRTC peer connections used by Moonlight-Web.
+# Used as fallback when direct (Tailscale) P2P connections are not possible
+# (e.g. strict corporate firewalls, double NAT, UDP-blocked networks).
+#
+# Usage:
+#   docker compose up -d
+#   docker compose logs -f coturn
+#
+# Prerequisites:
+#   - ./turnserver.conf  — coturn configuration (TURN_SECRET must be set)
+#   - ./certs/           — TLS certificate and key for TURNS (port 5349)
+#       server.crt / server.key
+#       Generate with: scripts/generate-certs.ps1 or openssl
+#
+# Firewall ports to open on the host:
+#   3478/udp  — STUN / TURN (primary)
+#   3478/tcp  — TURN over TCP
+#   5349/udp  — TURNS (TLS)
+#   5349/tcp  — TURNS (TLS)
+#   40000-40010/udp — coturn relay port range
+# =============================================================================
+
+services:
+  coturn:
+    image: coturn/coturn:latest
+    container_name: coturn
+    restart: unless-stopped
+
+    # Use host networking so coturn sees the real client IPs for relay
+    # candidate address allocation.  This is required for correct external
+    # IP detection and WebRTC candidate generation.
+    network_mode: host
+
+    volumes:
+      # Main configuration file (read-only inside container)
+      - ./turnserver.conf:/etc/coturn/turnserver.conf:ro
+      # TLS certificates directory
+      - ./certs:/etc/coturn/certs:ro
+      # Persistent log directory (writable)
+      - coturn-logs:/var/log/coturn
+
+    environment:
+      # coturn's Docker entrypoint uses DETECT_EXTERNAL_IP to auto-populate
+      # the 'external-ip' directive at container startup via an STUN request.
+      - DETECT_EXTERNAL_IP=yes
+
+    # Cap resources to prevent a single container from monopolising the host
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M
+        reservations:
+          cpus: "0.25"
+          memory: 64M
+
+    # Expose explicit port mappings as documentation even though network_mode=host
+    # ignores them; they serve as a firewall checklist reference.
+    # (These are no-ops under host networking but harmless.)
+    # ports:
+    #   - "3478:3478/udp"
+    #   - "3478:3478/tcp"
+    #   - "5349:5349/udp"
+    #   - "5349:5349/tcp"
+    #   - "40000-40010:40000-40010/udp"
+
+    healthcheck:
+      # turnutils_uclient sends a test allocation to the local TURN server.
+      # Exit 0 = server is accepting requests; non-zero = unhealthy.
+      test:
+        - "CMD"
+        - "turnutils_uclient"
+        - "-t"          # TCP transport (more firewall-friendly for health checks)
+        - "127.0.0.1"
+      interval: 30s
+      timeout:  10s
+      retries:  3
+      start_period: 10s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    labels:
+      com.remote-desktop.service: "turn-server"
+      com.remote-desktop.component: "coturn"
+
+volumes:
+  coturn-logs:
+    driver: local

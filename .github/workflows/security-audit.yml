@@ -1,0 +1,161 @@
+name: Security Audit
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    # Every Monday at 09:00 UTC
+    - cron: '0 9 * * 1'
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Job 1: Audit Rust dependencies with cargo-audit
+  # ─────────────────────────────────────────────────────────────────────────────
+  cargo-audit:
+    name: Cargo Audit (Rust)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-audit-registry-${{ hashFiles('moonlight-web/server/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-audit-registry-
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+        # Uses pre-compiled binaries from GitHub Releases — no crates.io compile,
+        # no HTTP/2 framing errors. Falls back to `cargo install` automatically.
+
+      - name: Run cargo audit
+        working-directory: moonlight-web/server
+        run: |
+          cargo audit --json > ../../cargo-audit-report.json || {
+            echo "cargo audit found vulnerabilities — see uploaded report."
+            # Still upload the report before failing
+            exit 1
+          }
+
+      - name: Upload cargo audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-audit-report
+          path: cargo-audit-report.json
+          retention-days: 90
+          if-no-files-found: warn
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Job 2: Audit npm dependencies
+  # ─────────────────────────────────────────────────────────────────────────────
+  npm-audit:
+    name: npm Audit (Node.js)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('moonlight-web/web/package-lock.json', 'moonlight-web/web/package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-
+
+      - name: Install dependencies
+        working-directory: moonlight-web/web
+        run: npm install   # generates package-lock.json if missing
+
+      - name: Run npm audit and generate report
+        working-directory: moonlight-web/web
+        # Always generate the JSON report; capture exit code for the fail step
+        run: |
+          npm audit --json > npm-audit-report.json || true
+          npm audit --audit-level=high
+
+      - name: Upload npm audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-audit-report
+          path: moonlight-web/web/npm-audit-report.json
+          retention-days: 90
+          if-no-files-found: warn
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Job 3: CodeQL static analysis (JavaScript / TypeScript)
+  # ─────────────────────────────────────────────────────────────────────────────
+  codeql:
+    name: CodeQL Analysis (JS/TS)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript,typescript
+          # Use security-and-quality query suite for thorough scanning
+          queries: security-and-quality
+
+      - name: Setup Node.js 20 (for autobuild)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('moonlight-web/web/package-lock.json', 'moonlight-web/web/package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: '/language:javascript'
+          upload: true

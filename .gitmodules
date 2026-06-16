@@ -1,0 +1,12 @@
+[submodule "moonlight-web/upstream"]
+	path = moonlight-web/upstream
+	url = https://github.com/MrCreativ3001/moonlight-web-stream.git
+	branch = main
+
+[submodule "sunshine"]
+	path = sunshine
+	url = https://github.com/LizardByte/Sunshine.git
+	branch = master
+	# Reference only — Sunshine is used as a pre-built binary in installer/resources/
+	# Do not build from source; fetch latest release in installer/build.ps1
+	shallow = true

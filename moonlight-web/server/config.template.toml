@@ -1,0 +1,158 @@
+# =============================================================================
+# Moonlight-Web Server Configuration Template
+# web-server.exe reads this as config.toml at startup.
+#
+# Variables (${...}) are substituted by install scripts:
+#   scripts/configure-moonlight.ps1
+#
+# Restart web-server.exe after any change to this file.
+# =============================================================================
+
+# =============================================================================
+# [server] — HTTP/HTTPS listener
+# =============================================================================
+[server]
+
+# Bind address.  0.0.0.0 = all interfaces; 127.0.0.1 = localhost only.
+host = "0.0.0.0"
+
+# HTTP port for the web frontend.  Tailscale Funnel proxies 443 → this port.
+port = 8080
+
+# TLS certificate and key for direct HTTPS (used when not behind a proxy).
+# Paths substituted at install time; forward-slash or double-backslash on Windows.
+tls_cert = "${INSTALL_DIR}/certs/server.crt"
+tls_key  = "${INSTALL_DIR}/certs/server.key"
+
+# Serve TLS directly on this port (0 = disabled; use 8443 to enable).
+# If using Tailscale Funnel, leave at 0 — Funnel terminates TLS externally.
+tls_port = 0
+
+# Static files directory (bundled SPA assets).
+static_dir = "${INSTALL_DIR}/moonlight-web/static"
+
+# Allowed origins for CORS (comma-separated).  Use "*" for permissive dev mode.
+# In production, restrict to the Funnel hostname.
+cors_allowed_origins = ["https://${TAILSCALE_HOSTNAME}"]
+
+# =============================================================================
+# [auth] — Authentication and session management
+# =============================================================================
+[auth]
+
+# HMAC-SHA256 secret for signing JWT access tokens.
+# Generate with: openssl rand -hex 32
+# Rotated automatically by configure-moonlight.ps1 on fresh install.
+jwt_secret = "${JWT_SECRET}"
+
+# bcrypt hash of the admin web UI password.
+# Set with: web-server.exe --hash-password <password>
+admin_password_hash = "${ADMIN_PASSWORD_HASH}"
+
+# Access token lifetime in hours.
+token_expiry_hours = 24
+
+# Refresh token lifetime in days.
+refresh_token_expiry_days = 7
+
+# Require re-authentication after this many hours of inactivity (0 = disabled).
+idle_timeout_hours = 0
+
+# =============================================================================
+# [sunshine] — Connection to the local Sunshine streaming server
+# =============================================================================
+[sunshine]
+
+# Sunshine host (always localhost — co-hosted on the same machine).
+host = "127.0.0.1"
+
+# Sunshine HTTPS management API port.
+port = 47989
+
+# Sunshine RTSP signalling port (used by Moonlight clients).
+signaling_port = 47999
+
+# TLS verification for the Sunshine management API.
+# Set to false only if Sunshine uses a self-signed certificate and
+# certificate pinning is not configured.
+tls_verify = false
+
+# Sunshine management API credentials (mirrored from sunshine.conf.template).
+# web-server.exe uses these to proxy /api/sunshine/* calls.
+api_username = "${ADMIN_USERNAME}"
+api_password = "${ADMIN_PASSWORD}"
+
+# =============================================================================
+# [ice] — ICE / WebRTC server configuration
+# =============================================================================
+
+# Public STUN servers for NAT traversal candidate gathering.
+[[ice.servers]]
+urls = ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]
+
+# Self-hosted coturn TURN server (plain UDP/TCP, port 3478).
+[[ice.servers]]
+urls       = ["turn:${TAILSCALE_IP}:3478"]
+username   = "${TURN_USER}"
+credential = "${TURN_PASS}"
+
+# Self-hosted coturn TURNS server (TLS, port 5349).
+# Required for clients behind firewalls that block plaintext UDP.
+[[ice.servers]]
+urls       = ["turns:${TAILSCALE_IP}:5349"]
+username   = "${TURN_USER}"
+credential = "${TURN_PASS}"
+
+# ICE transport policy: "all" (prefer direct) | "relay" (force TURN).
+# Use "relay" for debugging connectivity; use "all" in production.
+ice_transport_policy = "all"
+
+# TURN credential TTL in seconds.  web-server.exe generates ephemeral
+# HMAC credentials using TURN_SECRET; this sets their expiry.
+turn_credential_ttl = 3600
+
+# =============================================================================
+# [limits] — Resource limits and rate limiting
+# =============================================================================
+[limits]
+
+# Maximum simultaneous streaming sessions.
+max_sessions = 4
+
+# API request rate limit (requests per second per IP).
+rate_limit_rps = 10
+
+# API rate limit burst capacity.
+rate_limit_burst = 30
+
+# Maximum request body size in bytes (for API endpoints).
+max_body_bytes = 1048576   # 1 MiB
+
+# =============================================================================
+# [logging] — Application logging
+# =============================================================================
+[logging]
+
+# Log level: trace | debug | info | warn | error
+level = "info"
+
+# Log format: "text" | "json"
+format = "text"
+
+# Log file path (empty = stdout only).
+file = "${INSTALL_DIR}/logs/moonlight-web.log"
+
+# Rotate log file when it exceeds this size (bytes; 0 = disabled).
+max_size_bytes = 10485760   # 10 MiB
+
+# Number of rotated log files to retain.
+max_backups = 5
+
+# =============================================================================
+# [metrics] — Prometheus-compatible metrics endpoint (optional)
+# =============================================================================
+[metrics]
+
+# Expose metrics at /metrics.  Disable in public deployments unless protected.
+enabled = false
+path    = "/metrics"

@@ -1,0 +1,324 @@
+name: Build & Release Installer
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: sccache
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Job 1: Build the React/TypeScript frontend
+  # ─────────────────────────────────────────────────────────────────────────────
+  build-frontend:
+    name: Build Frontend (Node.js 20)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        continue-on-error: true          # Don't fail if no lock file yet
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('moonlight-web/web/package-lock.json', 'moonlight-web/web/package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-
+
+      - name: Install dependencies
+        working-directory: moonlight-web/web
+        run: npm install   # generates package-lock.json if missing
+
+      - name: Build frontend
+        working-directory: moonlight-web/web
+        run: npm run build
+
+      - name: Upload frontend static artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-static
+          path: moonlight-web/web/dist/
+          retention-days: 1
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Job 2: Build the Rust web server (Windows)
+  # ─────────────────────────────────────────────────────────────────────────────
+  build-server:
+    name: Build Web Server (Rust / Windows)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    needs: build-frontend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Configure sccache
+        uses: mozilla-actions/sccache-action@v0.0.5
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('moonlight-web/server/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Download frontend-static artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-static
+          path: moonlight-web/server/static/
+
+      - name: Build release binary
+        working-directory: moonlight-web/server
+        run: cargo build --release
+
+      - name: Run tests
+        working-directory: moonlight-web/server
+        run: cargo test
+
+      - name: Upload web-server.exe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-server-exe
+          path: moonlight-web/server/target/release/web-server.exe
+          retention-days: 1
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Job 3: Build the NSIS installer (Windows)
+  # ─────────────────────────────────────────────────────────────────────────────
+  build-installer:
+    name: Build NSIS Installer
+    runs-on: windows-latest
+    timeout-minutes: 45
+    needs:
+      - build-frontend
+      - build-server
+
+    env:
+      SUNSHINE_RELEASE_TAG: 'v0.23.1'
+      TAILSCALE_VERSION: '1.66.4'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install NSIS 3.x via Chocolatey
+        run: choco install nsis -y --no-progress
+        shell: powershell
+
+      - name: Install 7-Zip via Chocolatey
+        run: choco install 7zip -y --no-progress
+        shell: powershell
+
+      - name: Refresh PATH after Chocolatey installs
+        run: |
+          $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH","User")
+          echo "PATH=$env:PATH" >> $env:GITHUB_ENV
+        shell: powershell
+
+      - name: Verify NSIS installation
+        run: makensis /VERSION
+        shell: powershell
+
+      - name: Download web-server-exe artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: web-server-exe
+          path: installer/resources/
+
+      - name: Download Sunshine release from GitHub
+        shell: powershell
+        run: |
+          $tag = "${{ env.SUNSHINE_RELEASE_TAG }}"
+          $apiUrl = "https://api.github.com/repos/LizardByte/Sunshine/releases/tags/$tag"
+          $headers = @{ "Accept" = "application/vnd.github.v3+json"; "User-Agent" = "GitHub-Actions" }
+          $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers
+          $asset = $release.assets | Where-Object { $_.name -like "*windows*" -and $_.name -like "*.exe" } | Select-Object -First 1
+          if (-not $asset) {
+            Write-Error "Could not find Sunshine Windows installer asset for tag $tag"
+            exit 1
+          }
+          Write-Host "Downloading Sunshine: $($asset.name)"
+          Invoke-WebRequest -Uri $asset.browser_download_url `
+            -OutFile "installer/resources/sunshine-installer.exe" `
+            -Headers $headers
+          Write-Host "Downloaded Sunshine installer to installer/resources/sunshine-installer.exe"
+
+      - name: Download Tailscale MSI
+        shell: powershell
+        run: |
+          $version = "${{ env.TAILSCALE_VERSION }}"
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-${version}-amd64.msi"
+          Write-Host "Downloading Tailscale MSI from $url"
+          Invoke-WebRequest -Uri $url -OutFile "installer/resources/tailscale.msi"
+          Write-Host "Downloaded Tailscale MSI to installer/resources/tailscale.msi"
+
+      - name: Copy config templates to installer resources
+        shell: powershell
+        run: |
+          $src = "config/"
+          $dst = "installer/resources/config/"
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          if (Test-Path $src) {
+            Copy-Item -Path "$src*" -Destination $dst -Recurse -Force
+            Write-Host "Copied config templates to $dst"
+          } else {
+            Write-Warning "Config directory '$src' not found — skipping."
+          }
+
+      - name: Decode signing certificate (if available)
+        if: ${{ secrets.SIGN_CERT_BASE64 != '' && secrets.SIGN_CERT_PASSWORD != '' }}
+        shell: powershell
+        env:
+          SIGN_CERT_BASE64: ${{ secrets.SIGN_CERT_BASE64 }}
+          SIGN_CERT_PASSWORD: ${{ secrets.SIGN_CERT_PASSWORD }}
+        run: |
+          $certBytes = [System.Convert]::FromBase64String($env:SIGN_CERT_BASE64)
+          $certPath  = "installer/signing.pfx"
+          [System.IO.File]::WriteAllBytes($certPath, $certBytes)
+          Write-Host "Certificate decoded to $certPath"
+          echo "SIGN_CERT_PATH=$certPath" >> $env:GITHUB_ENV
+          echo "SIGN_CERT_PASSWORD=$env:SIGN_CERT_PASSWORD" >> $env:GITHUB_ENV
+
+      - name: Build installer via build.ps1
+        working-directory: installer
+        shell: powershell
+        env:
+          SIGN_CERT_PATH:     ${{ env.SIGN_CERT_PATH }}
+          SIGN_CERT_PASSWORD: ${{ env.SIGN_CERT_PASSWORD }}
+        run: |
+          $params = @()
+          if ($env:SIGN_CERT_PATH -and (Test-Path $env:SIGN_CERT_PATH)) {
+            $params += "-SignCertPath",     $env:SIGN_CERT_PATH
+            $params += "-SignCertPassword", $env:SIGN_CERT_PASSWORD
+            Write-Host "Code-signing enabled."
+          } else {
+            Write-Host "No signing certificate found — skipping code signing."
+          }
+          powershell -File build.ps1 @params
+
+      - name: Sign installer exe with signtool (if cert available)
+        if: ${{ env.SIGN_CERT_PATH != '' }}
+        shell: powershell
+        run: |
+          $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits" -Recurse -Filter "signtool.exe" |
+                       Sort-Object FullName | Select-Object -Last 1).FullName
+          if (-not $signtool) { Write-Error "signtool.exe not found"; exit 1 }
+          $installer = Get-ChildItem "installer\Output\*.exe" | Select-Object -First 1
+          & $signtool sign `
+            /fd SHA256 `
+            /td SHA256 `
+            /tr http://timestamp.digicert.com `
+            /f "$env:SIGN_CERT_PATH" `
+            /p "$env:SIGN_CERT_PASSWORD" `
+            "$($installer.FullName)"
+          Write-Host "Signed: $($installer.FullName)"
+
+      - name: Compute SHA256 checksum
+        shell: powershell
+        run: |
+          $exe = Get-ChildItem "installer\Output\*.exe" | Select-Object -First 1
+          $hash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash
+          "$hash  $($exe.Name)" | Out-File -Encoding ASCII "installer\Output\$($exe.BaseName).sha256"
+          Write-Host "SHA256: $hash  $($exe.Name)"
+
+      - name: Upload installer-exe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-exe
+          path: |
+            installer/Output/*.exe
+            installer/Output/*.sha256
+          retention-days: 30
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Job 4: Create GitHub Release (tag pushes only)
+  # ─────────────────────────────────────────────────────────────────────────────
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: build-installer
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download installer-exe artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: installer-exe
+          path: release-assets/
+
+      - name: List release assets
+        run: ls -lh release-assets/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Remote Desktop Solution ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          files: |
+            release-assets/*.exe
+            release-assets/*.sha256
+          body: |
+            ## Remote Desktop Solution ${{ github.ref_name }}
+
+            Stream your Windows PC to iPad via WebRTC using Sunshine + Moonlight Web.
+
+            ### Installation
+            1. Download the installer `.exe` below.
+            2. Run as Administrator.
+            3. Follow the setup wizard.
+
+            ### Verification
+            Verify the installer integrity using the `.sha256` checksum file:
+            ```powershell
+            certutil -hashfile RemoteDesktopSetup-*.exe SHA256
+            ```
+            Compare the output against the contents of the `.sha256` file.
+
+            ### What's Changed
+            See the auto-generated release notes below.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

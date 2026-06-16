@@ -1,0 +1,188 @@
+# =============================================================================
+# Sunshine Remote Desktop Server Configuration
+# Template — variables like ${TAILSCALE_IP} are substituted by install scripts
+#
+# Variable substitution performed by:
+#   scripts/configure-sunshine.ps1
+#
+# Documentation:
+#   https://docs.lizardbyte.dev/projects/sunshine/en/latest/about/usage.html
+# =============================================================================
+
+# =============================================================================
+# --- Network ---
+# =============================================================================
+
+# Bind address for the Sunshine HTTP/HTTPS management + streaming interface.
+# 0.0.0.0 = listen on all interfaces (required for Tailscale + LAN access).
+address = 0.0.0.0
+
+# Base port for Sunshine services. The following ports are derived from this:
+#   port        → HTTPS Web UI (management)
+#   port + 1    → HTTP  Web UI (redirect to HTTPS)
+#   port - 5    → RTSP  signalling  (47984)
+#   port - 4    → Video streaming   (47985)
+#   port - 3    → Control channel   (47986)
+#   port - 2    → Audio streaming   (47987)
+#   port - 1    → Mic input         (47988)
+# Ensure all derived ports are open in Windows Firewall (see firewall-rules.ps1).
+port = 47989
+
+# Public / external IP used for STUN peer-reflexive candidates.
+# Leave blank to let Sunshine auto-detect via STUN. Set explicitly if the
+# host sits behind a static NAT where auto-detection is unreliable.
+external_ip =
+
+# Origin header allowed for the web UI.  Use "*" only in trusted networks.
+# Example: origin_web_ui_allowed = https://my-host.tailscale.net
+origin_web_ui_allowed = *
+
+# =============================================================================
+# --- Video Encoding ---
+# =============================================================================
+
+# Hardware encoder backend.
+#   nvenc     — NVIDIA (NVENC API, requires driver ≥ 522)
+#   amdvce    — AMD   (AMF / VCE, requires Adrenalin driver)
+#   vaapi     — Intel / AMD on Linux (VA-API)
+#   software  — CPU-based (libx264 / libx265), high CPU load, use as fallback
+#
+# The install script detects the GPU and sets this automatically.
+encoder = ${ENCODER}
+
+# Codec availability flags — both enabled lets the client negotiate.
+codec_hevc = enabled
+codec_h264 = enabled
+# AV1 requires NVENC AV1 (Ada+) or AV1 VAAPI; disable if unsupported.
+codec_av1 = disabled
+
+# Number of encoding threads (software encoder) / async depth (HW encoders).
+# Increase min_threads for high-refresh-rate or multi-monitor sessions.
+min_threads = 2
+
+# Constant Quality Preset (CQP / CRF).
+#   LAN / high-bandwidth  : 18–22 (near-lossless)
+#   Internet / WAN        : 24–30 (moderate compression)
+# Lower value = higher quality, higher bitrate.
+hevc_cqp = 22
+h264_cqp = 22
+av1_cqp  = 22
+
+# Maximum bitrate cap in Kbps (0 = unlimited, let CQP control quality).
+# Recommended: 0 for LAN, 20000 for WAN / metered connections.
+max_bitrate = 0
+
+# Intra-refresh instead of IDR frames — reduces latency on packet loss.
+# Set to enabled for unreliable networks; disabled for LAN (cleaner seeks).
+intra_refresh = disabled
+
+# =============================================================================
+# --- Screen Capture ---
+# =============================================================================
+
+# Capture backend.
+#   wgc        — Windows Graphics Capture API (Win 10 1903+, cross-GPU, HDR)
+#   dxgi       — DXGI Desktop Duplication (older, faster, same-GPU only)
+#   nvfbc      — NVIDIA Framebuffer Capture (requires GRID/Quadro license)
+capture = wgc
+
+# Supported output resolutions offered to connecting clients.
+# Add or remove entries to match your monitor / virtual display driver.
+resolutions = 1280x720 1920x1080 2560x1440 3840x2160
+
+# Supported frame-rate options offered to clients (Hz).
+fps = 30 60 120
+
+# Automatically switch the host display to the resolution requested by client.
+# Requires a virtual display driver (e.g., IddSampleDriver) for headless hosts.
+# true | false
+auto_capture_fps = false
+
+# HDR passthrough — requires wgc capture and an HDR-capable display pipeline.
+# Clients must support HDR10 (Moonlight 5.0+).
+hdr = disabled
+
+# =============================================================================
+# --- Audio ---
+# =============================================================================
+
+# WASAPI loopback device name (stereo or surround).
+# Use "default" to capture the Windows default playback device.
+# Run: sunshine --list-audio-devices   to enumerate available sinks.
+audio_sink = ${AUDIO_SINK}
+
+# Virtual microphone source forwarded to the host (optional).
+# Allows client microphone to appear as a recording device on the host.
+# virtual_sink = VB-Audio VoiceMeeter VAIO
+
+# Audio bitrate in kbps (Opus codec).
+# 96  — acceptable quality, low bandwidth
+# 160 — recommended (CD-quality stereo)
+# 320 — high quality (5.1 surround)
+audio_bitrate = 160
+
+# =============================================================================
+# --- Input ---
+# =============================================================================
+
+# Enable virtual gamepad (XInput / DualShock emulation via ViGEm).
+gamepad = enabled
+
+# Enable keyboard forwarding.
+keyboard = enabled
+
+# Enable mouse forwarding.
+mouse = enabled
+
+# Swap left/right mouse buttons for left-handed clients.
+# mouse_button_swap = disabled
+
+# Enable touchscreen input forwarding (tablet / touchscreen clients).
+# touch = enabled
+
+# =============================================================================
+# --- Security ---
+# =============================================================================
+
+# PIN pairing timeout in seconds. After this duration without a completed
+# pairing, the PIN is invalidated. Set to 0 to disable timeout.
+pin_timeout = 300
+
+# Restrict web UI access to localhost only (management via SSH tunnel).
+# Set to false when using Tailscale Funnel or a reverse proxy.
+# local_streaming_only = false
+
+# =============================================================================
+# --- Performance Tuning ---
+# =============================================================================
+
+# Number of queued frames in the capture pipeline.
+# Increase if encoding stutters; decrease to reduce latency.
+# frame_queue_size = 3
+
+# Sleep inhibit — prevent Windows sleep/hibernate during active streams.
+# true | false
+inhibit_sleep = true
+
+# =============================================================================
+# --- Logging ---
+# =============================================================================
+
+# Minimum log level: verbose | debug | info | warning | error | fatal
+min_log_level = info
+
+# Absolute path to the Sunshine log file.
+# Use forward slashes or escaped backslashes on Windows.
+log_path = ${INSTALL_DIR}\logs\sunshine.log
+
+# =============================================================================
+# --- Credentials ---
+# =============================================================================
+
+# Web UI administrator username.
+username = ${ADMIN_USERNAME}
+
+# Password hash is managed by Sunshine internally after first run.
+# Do NOT set a plaintext password here; use the web UI or:
+#   sunshine --set-password <password>
+# to initialise credentials.
